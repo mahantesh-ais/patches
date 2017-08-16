@@ -1,0 +1,502 @@
+Index: xen-4.8.1/tools/libxl/Makefile
+===================================================================
+--- xen-4.8.1.orig/tools/libxl/Makefile	2017-04-10 09:21:48.000000000 -0400
++++ xen-4.8.1/tools/libxl/Makefile	2017-08-16 17:26:19.543582296 -0400
+@@ -20,17 +20,17 @@
+ endif
+ 
+ LIBXL_LIBS =
+-LIBXL_LIBS = $(LDLIBS_libxentoollog) $(LDLIBS_libxenevtchn) $(LDLIBS_libxenctrl) $(LDLIBS_libxenguest) $(LDLIBS_libxenstore) $(LDLIBS_libblktapctl) $(PTYFUNCS_LIBS) $(LIBUUID_LIBS)
++LIBXL_LIBS = $(LDLIBS_libxentoollog) $(LDLIBS_libxenevtchn) $(LDLIBS_libxenctrl) $(LDLIBS_libxenguest) $(LDLIBS_libxenstore) $(PTYFUNCS_LIBS) $(LIBUUID_LIBS)
+ ifeq ($(CONFIG_LIBNL),y)
+ LIBXL_LIBS += $(LIBNL3_LIBS)
+ endif
+ 
++CFLAGS_LIBXL += -I/usr/include/blktap
+ CFLAGS_LIBXL += $(CFLAGS_libxentoollog)
+ CFLAGS_LIBXL += $(CFLAGS_libxenevtchn)
+ CFLAGS_LIBXL += $(CFLAGS_libxenctrl)
+ CFLAGS_LIBXL += $(CFLAGS_libxenguest)
+ CFLAGS_LIBXL += $(CFLAGS_libxenstore)
+-CFLAGS_LIBXL += $(CFLAGS_libblktapctl) 
+ ifeq ($(CONFIG_LIBNL),y)
+ CFLAGS_LIBXL += $(LIBNL3_CFLAGS)
+ endif
+@@ -47,9 +47,9 @@
+ 
+ LIBXL_OBJS-y = osdeps.o libxl_paths.o libxl_bootloader.o flexarray.o
+ ifeq ($(LIBXL_BLKTAP),y)
+-LIBXL_OBJS-y += libxl_blktap2.o
++LIBXL_OBJS-y += libxl_blktap3.o
+ else
+-LIBXL_OBJS-y += libxl_noblktap2.o
++LIBXL_OBJS-y += libxl_noblktap3.o
+ endif
+ 
+ ifeq ($(CONFIG_LIBNL),y)
+Index: xen-4.8.1/tools/libxl/libxl.c
+===================================================================
+--- xen-4.8.1.orig/tools/libxl/libxl.c	2017-04-10 09:21:48.000000000 -0400
++++ xen-4.8.1/tools/libxl/libxl.c	2017-08-16 17:26:19.535582297 -0400
+@@ -1338,7 +1338,7 @@
+             "/local/domain/%d/backend/%" TOSTRING(BACKEND_STRING_SIZE)
+            "[a-z]/%*d/%*d",
+            &disk->backend_domid, backend_type);
+-    if (!strcmp(backend_type, "tap") || !strcmp(backend_type, "vbd")) {
++    if (!strcmp(backend_type, "tap") || !strcmp(backend_type, "vbd") || !strcmp(backend_type, "vbd3")) {
+         disk->backend = LIBXL_DISK_BACKEND_TAP;
+     } else if (!strcmp(backend_type, "qdisk")) {
+         disk->backend = LIBXL_DISK_BACKEND_QDISK;
+@@ -2099,7 +2099,7 @@
+             device->backend_kind = LIBXL__DEVICE_KIND_VBD;
+             break;
+         case LIBXL_DISK_BACKEND_TAP:
+-            device->backend_kind = LIBXL__DEVICE_KIND_VBD;
++            device->backend_kind = LIBXL__DEVICE_KIND_VBD3;
+             break;
+         case LIBXL_DISK_BACKEND_QDISK:
+             device->backend_kind = LIBXL__DEVICE_KIND_QDISK;
+@@ -2219,7 +2219,6 @@
+             case LIBXL_DISK_BACKEND_PHY:
+                 dev = disk->pdev_path;
+ 
+-        do_backend_phy:
+                 flexarray_append(back, "params");
+                 flexarray_append(back, dev);
+ 
+@@ -2231,27 +2230,28 @@
+                 break;
+ 
+             case LIBXL_DISK_BACKEND_TAP:
+-                if (dev == NULL) {
+-                    dev = libxl__blktap_devpath(gc, disk->pdev_path,
+-                                                disk->format);
+-                    if (!dev) {
+-                        LOG(ERROR, "failed to get blktap devpath for %p",
+-                            disk->pdev_path);
+-                        rc = ERROR_FAIL;
+-                        goto out;
+-                    }
++		rc = 0;
++                dev = libxl__blktap_devpath(gc, disk->pdev_path, disk->format);
++		if (!dev) {
++                    LOG(ERROR, "failed to get blktap devpath for %s: %s\n",
++                        disk->pdev_path, strerror(rc));
++                    rc = ERROR_FAIL;
++                    goto out;
+                 }
++		LOG(DEBUG,"\nBLKTAP3_DEBUG: dev path = %s \n", dev);
++		if (!disk->script && disk->backend_domid == LIBXL_TOOLSTACK_DOMID) {
++		    int major, minor;
++		    if (!libxl__device_physdisk_major_minor(dev, &major, &minor)) {
++			LOG(DEBUG, "\nBLKTAP3_DEBUG: major:minor = %x:%x\n",major,minor);
++			flexarray_append_pair(back, "physical-device",
++                        	GCSPRINTF("%x:%x", major, minor));
++		    }
++		}
+                 flexarray_append(back, "tapdisk-params");
+                 flexarray_append(back, GCSPRINTF("%s:%s",
+                     libxl__device_disk_string_of_format(disk->format),
+                     disk->pdev_path));
+-
+-                /* tap backends with scripts are rejected by
+-                 * libxl__device_disk_set_backend */
+-                assert(!disk->script);
+-
+-                /* now create a phy device to export the device to the guest */
+-                goto do_backend_phy;
++		break;
+             case LIBXL_DISK_BACKEND_QDISK:
+                 flexarray_append(back, "params");
+                 flexarray_append(back, GCSPRINTF("%s:%s",
+@@ -3775,7 +3775,6 @@
+             dmss->guest_domid = dev->domid;
+             dmss->spawn.ao = ao;
+             dmss->callback = qdisk_spawn_outcome;
+-
+             libxl__spawn_qdisk_backend(egc, dmss);
+         }
+         dguest->num_qdisks++;
+@@ -3905,7 +3904,7 @@
+         ddev->dev = dev;
+         LIBXL_SLIST_INSERT_HEAD(&dguest->devices, ddev, next);
+         LOG(DEBUG, "added device %s to the list of active devices", path);
+-        rc = add_device(egc, nested_ao, dguest, ddev);
++	rc = add_device(egc, nested_ao, dguest, ddev);
+         if (rc > 0)
+             free_ao = true;
+     } else if (state == XenbusStateClosed && online == 0) {
+Index: xen-4.8.1/tools/libxl/libxl_blktap3.c
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ xen-4.8.1/tools/libxl/libxl_blktap3.c	2017-08-16 17:27:48.859581442 -0400
+@@ -0,0 +1,139 @@
++/*
++ * Copyright (C) 2012      Advanced Micro Devices
++ * Author Christoph Egger <Christoph.Egger@amd.com>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU Lesser General Public License as published
++ * by the Free Software Foundation; version 2.1 only.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU Lesser General Public License for more details.
++ */
++
++#include "libxl_osdeps.h" /* must come before any other headers */
++#include "libxl_internal.h"
++
++#include <tap-ctl.h>
++
++#include "list.h"   /* include for list_head structure */
++
++static int blktap_find(const char *type, const char *path, struct tap_list *tap)
++{
++    struct list_head list; /* Note: structure name updated */
++    struct tap_list *entry, *next_t;
++    int ret = -ENOENT, err;
++
++    /* TAILQ_INIT(&list);--> old function */
++    INIT_LIST_HEAD(&list);
++
++    if ((err = tap_ctl_list(&list)))
++        return err;
++
++    /* TAILQ_EMPTY(&list)--> old function */
++    if (list_empty(&list))
++        return ret;
++
++    tap_list_for_each_entry_safe(entry, next_t, &list) {
++
++        if (type && (!entry->type || strcmp(entry->type, type)))
++            continue;
++
++        if (path && (!entry->path || strcmp(entry->path, path)))
++            continue;
++
++        *tap = *entry;
++	tap->type = tap->path = NULL;
++        ret = 0;
++        break;
++    }
++
++    tap_ctl_list_free(&list);
++
++    return ret;
++}
++
++/**
++ * blktap3 doesn't require blkback, so it's always available.
++ */
++int libxl__blktap_enabled(libxl__gc *gc)
++{
++    return 1;
++}
++
++char *libxl__blktap_devpath(libxl__gc *gc, const char *disk,
++		libxl_disk_format format)
++{
++    const char *type = NULL;
++    char *params, *devname = NULL;
++    struct tap_list tap;
++    int err = 0;
++    int flags = 0;
++
++    type = libxl__device_disk_string_of_format(format);
++    if (!(err = blktap_find(type, disk, &tap))) {
++        LOG(DEBUG, "found tapdisk\n");
++	devname = libxl__sprintf(gc, "/dev/xen/blktap-2/tapdev%d", tap.minor);
++        if (devname)
++            return devname;
++		/* return 0; revert-back-changes*/
++    }
++
++    LOG(DEBUG, "tapdisk not found\n");
++
++	/* TODO Should we worry about return codes other than ENOENT? */
++
++    params = libxl__sprintf(gc, "%s:%s", type, disk);
++
++    /* tap_ctl_create(params, 0, -1, NULL) --> old function call  */
++    if (!(err = tap_ctl_create(params, &devname, flags, -1, 0, 0))) {
++        LOG(DEBUG, "created tapdisk\n");
++        return devname; /*revert-back-changes*/
++    }
++
++    LOG(ERROR, "error creating tapdisk: %s\n", strerror(err));
++
++    return NULL;/*revert-back-changes*/
++}
++
++int libxl__device_destroy_tapdisk(libxl__gc *gc, const char *be_path)
++{
++    char *disk;
++    int err;
++    struct tap_list tap;
++
++	LOG(DEBUG, "destroying tapdisk %s\n", be_path);
++
++    disk = strchr(be_path, ':');
++    if (!disk) {
++        LOG(ERROR, "Unable to parse params %s", be_path);
++        return ERROR_INVAL;
++    }
++
++    *disk++ = '\0';
++
++    err = blktap_find(be_path, disk, &tap);
++    if (err < 0) {
++        /* returns -errno */
++        LOGEV(ERROR, -err, "Unable to find type %s disk %s", be_path, disk);
++        return ERROR_FAIL;
++    }
++
++    err = tap_ctl_destroy(tap.pid, tap.minor, 0, NULL);
++    if (err < 0) {
++        LOGEV(ERROR, -err, "Failed to destroy tap device id %d minor %d",
++              tap.pid, tap.minor);
++        return ERROR_FAIL;
++    }
++
++    return 0;
++}
++
++/*
++ * Local variables:
++ * mode: C
++ * c-basic-offset: 4
++ * indent-tabs-mode: nil
++ * End:
++ */
+Index: xen-4.8.1/tools/libxl/libxl_device.c
+===================================================================
+--- xen-4.8.1.orig/tools/libxl/libxl_device.c	2017-04-10 09:21:48.000000000 -0400
++++ xen-4.8.1/tools/libxl/libxl_device.c	2017-08-16 17:26:19.539582296 -0400
+@@ -286,7 +286,6 @@
+ 
+     case LIBXL_DISK_BACKEND_TAP:
+         if (a->disk->script) goto bad_script;
+-
+         if (libxl_defbool_val(a->disk->colo_enable))
+             goto bad_colo;
+ 
+@@ -295,11 +294,6 @@
+                        a->disk->vdev);
+             return 0;
+         }
+-        if (!libxl__blktap_enabled(a->gc)) {
+-            LOG(DEBUG, "Disk vdev=%s, backend tap unsuitable because blktap "
+-                       "not available", a->disk->vdev);
+-            return 0;
+-        }
+         if (!(a->disk->format == LIBXL_DISK_FORMAT_RAW ||
+               a->disk->format == LIBXL_DISK_FORMAT_VHD)) {
+             goto bad_format;
+@@ -429,7 +423,8 @@
+ {
+     struct stat buf;
+     if (stat(physpath, &buf) < 0)
+-        return -1;
++	return -1;
++
+     if (!S_ISBLK(buf.st_mode))
+         return -1;
+     *major = major(buf.st_rdev);
+@@ -917,7 +912,6 @@
+         LOG(ERROR, "unable to get my domid");
+         goto out;
+     }
+-
+     if (my_domid == LIBXL_TOOLSTACK_DOMID) {
+         rc = libxl_domain_info(CTX, &info, domid);
+         if (rc) {
+@@ -1063,7 +1057,7 @@
+         aodev->action == LIBXL__DEVICE_ACTION_REMOVE &&
+         !aodev->force) {
+         LOG(DEBUG, "Timeout reached, initiating forced remove");
+-        aodev->force = 1;
++	aodev->force = 1;
+         libxl__initiate_device_generic_remove(egc, aodev);
+         return;
+     }
+@@ -1074,7 +1068,6 @@
+                    libxl__device_backend_path(gc, aodev->dev));
+         goto out;
+     }
+-
+     device_hotplug(egc, aodev);
+     return;
+ 
+Index: xen-4.8.1/tools/libxl/libxl_dm.c
+===================================================================
+--- xen-4.8.1.orig/tools/libxl/libxl_dm.c	2017-04-10 09:21:48.000000000 -0400
++++ xen-4.8.1/tools/libxl/libxl_dm.c	2017-08-16 17:26:19.539582296 -0400
+@@ -1371,9 +1371,8 @@
+                  * the bootloader path.
+                  */
+                 if (disks[i].backend == LIBXL_DISK_BACKEND_TAP)
+-                    target_path = libxl__blktap_devpath(gc, disks[i].pdev_path,
+-                                                        disks[i].format);
+-                else
++		    target_path = NULL;
++		else
+                     target_path = libxl__device_disk_find_local_path(gc,
+                                                  guest_domid, &disks[i], true);
+ 
+@@ -1390,11 +1389,10 @@
+                 drive = libxl__sprintf(gc,
+                          "if=ide,index=%d,readonly=on,media=cdrom,id=ide-%i",
+                          disk, dev_number);
+-
+                 if (target_path)
+                     drive = libxl__sprintf(gc, "%s,file=%s,format=%s",
+                                            drive, target_path, format);
+-            } else {
++	    } else {
+                 /*
+                  * Explicit sd disks are passed through as is.
+                  *
+@@ -2109,7 +2107,6 @@
+     spawn->confirm_cb = device_model_confirm;
+     spawn->failure_cb = device_model_startup_failed;
+     spawn->detached_cb = device_model_detached;
+-
+     rc = libxl__spawn_spawn(egc, spawn);
+     if (rc < 0)
+         goto out_close;
+@@ -2340,6 +2337,7 @@
+     char *path = DEVICE_MODEL_XS_PATH(gc, LIBXL_TOOLSTACK_DOMID, domid, "");
+     if (!xs_rm(CTX->xsh, XBT_NULL, path))
+         LOG(ERROR, "xs_rm failed for %s", path);
++
+     /* We should try to destroy the device model anyway. */
+     return kill_device_model(gc,
+                 GCSPRINTF("/local/domain/%d/image/device-model-pid", domid));
+Index: xen-4.8.1/tools/libxl/libxl_internal.h
+===================================================================
+--- xen-4.8.1.orig/tools/libxl/libxl_internal.h	2017-04-10 09:21:48.000000000 -0400
++++ xen-4.8.1/tools/libxl/libxl_internal.h	2017-08-16 17:28:53.179580827 -0400
+@@ -1722,8 +1722,8 @@
+ /* libxl__blktap_devpath:
+  *    Argument: path and disk image as specified in config file.
+  *      The type specifies whether this is aio, qcow, qcow2, etc.
+- *    returns device path xenstore wants to have. returns NULL
+- *      if no device corresponds to the disk.
++ *    returns device path xenstore wants to have.
++ *            NULL, if no device corresponds to the disk.
+  */
+ _hidden char *libxl__blktap_devpath(libxl__gc *gc,
+                                     const char *disk,
+Index: xen-4.8.1/tools/libxl/libxl_types_internal.idl
+===================================================================
+--- xen-4.8.1.orig/tools/libxl/libxl_types_internal.idl	2017-04-10 09:21:48.000000000 -0400
++++ xen-4.8.1/tools/libxl/libxl_types_internal.idl	2017-08-16 17:26:19.543582296 -0400
+@@ -25,6 +25,7 @@
+     (8, "VTPM"),
+     (9, "VUSB"),
+     (10, "QUSB"),
++    (11, "VBD3"),
+     ])
+ 
+ libxl__console_backend = Enumeration("console_backend", [
+Index: xen-4.8.1/tools/libxl/libxl_blktap2.c
+===================================================================
+--- xen-4.8.1.orig/tools/libxl/libxl_blktap2.c	2017-04-10 09:21:48.000000000 -0400
++++ xen-4.8.1/tools/libxl/libxl_blktap2.c	2017-08-16 17:27:09.899581815 -0400
+@@ -1,94 +0,0 @@
+-/*
+- * Copyright (C) 2010      Advanced Micro Devices
+- * Author Christoph Egger <Christoph.Egger@amd.com>
+- *
+- * This program is free software; you can redistribute it and/or modify
+- * it under the terms of the GNU Lesser General Public License as published
+- * by the Free Software Foundation; version 2.1 only.
+- *
+- * This program is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+- * GNU Lesser General Public License for more details.
+- */
+-
+-#include "libxl_osdeps.h" /* must come before any other headers */
+-#include "libxl_internal.h"
+-
+-#include "tap-ctl.h"
+-
+-int libxl__blktap_enabled(libxl__gc *gc)
+-{
+-    const char *msg;
+-    return !tap_ctl_check(&msg);
+-}
+-
+-char *libxl__blktap_devpath(libxl__gc *gc,
+-                            const char *disk,
+-                            libxl_disk_format format)
+-{
+-    const char *type;
+-    char *params, *devname = NULL;
+-    tap_list_t tap;
+-    int err;
+-
+-    type = libxl__device_disk_string_of_format(format);
+-    err = tap_ctl_find(type, disk, &tap);
+-    if (err == 0) {
+-        devname = GCSPRINTF("/dev/xen/blktap-2/tapdev%d", tap.minor);
+-        if (devname)
+-            return devname;
+-    }
+-
+-    params = GCSPRINTF("%s:%s", type, disk);
+-    err = tap_ctl_create(params, &devname);
+-    if (!err) {
+-        libxl__ptr_add(gc, devname);
+-        return devname;
+-    }
+-
+-    free(devname);
+-    return NULL;
+-}
+-
+-
+-int libxl__device_destroy_tapdisk(libxl__gc *gc, const char *params)
+-{
+-    char *type, *disk;
+-    int err;
+-    tap_list_t tap;
+-
+-    type = libxl__strdup(gc, params);
+-
+-    disk = strchr(type, ':');
+-    if (!disk) {
+-        LOG(ERROR, "Unable to parse params %s", params);
+-        return ERROR_INVAL;
+-    }
+-
+-    *disk++ = '\0';
+-
+-    err = tap_ctl_find(type, disk, &tap);
+-    if (err < 0) {
+-        /* returns -errno */
+-        LOGEV(ERROR, -err, "Unable to find type %s disk %s", type, disk);
+-        return ERROR_FAIL;
+-    }
+-
+-    err = tap_ctl_destroy(tap.id, tap.minor);
+-    if (err < 0) {
+-        LOGEV(ERROR, -err, "Failed to destroy tap device id %d minor %d",
+-              tap.id, tap.minor);
+-        return ERROR_FAIL;
+-    }
+-
+-    return 0;
+-}
+-
+-/*
+- * Local variables:
+- * mode: C
+- * c-basic-offset: 4
+- * indent-tabs-mode: nil
+- * End:
+- */
