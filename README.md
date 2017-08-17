@@ -52,7 +52,7 @@ Steps followed to get Xen and Blktap3 working in coordination.
 Everything is set-up now :), need to start the guest to see xen and blktap3 in action.
 
 PV guest:
-	Download pv_guests/ to your working directory, (you can also download the image files from pv_images/ if you don't have one), update the jessie-pv.cfg file with correct attributes for different parameters and run `xl create jessie-pv.cfg`. This should initiate creation of jessie-pv guest.
+	Download pv_guests/ to your working directory, (you can also download the image files from "pv_images" repository if you don't have one), update the jessie-pv.cfg file with correct attributes for different parameters and run `xl create jessie-pv.cfg`. This should initiate creation of jessie-pv guest.
 
 HVM guest:
 	Will be updated soon...
