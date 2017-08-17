@@ -20,7 +20,7 @@ Steps followed to get Xen and Blktap3 working in coordination.
 	`sudo apt-get build-dep xen`
 
  	Now download xen-4.8.1 from internet (it is referred as xen-blktap3 below).
-	>> Create file .config in the xen-blktap3 tree and insert the following line (without quotes). This is required while running pv guests for the pygrub to execute properly.
+	> Create file .config in the xen-blktap3 tree and insert the following line (without quotes). This is required while running pv guests for the pygrub to execute properly.
 	"PYTHON_PREFIX_ARG=--install-layout=deb"
 
 	Run the following commands inside xen to build and install the dependencies for blktap3:
@@ -45,14 +45,14 @@ Steps followed to get Xen and Blktap3 working in coordination.
 	f. `sudo make install-xen`
 	g. `sudo update-grub`
 
------>Reboot now(`sudo reboot`) and load xen hypervisor.
+> Reboot now(`sudo reboot`) and load xen hypervisor.
 
 6. Run (as root) tapback as a daemon `tapback -d`, if debug messages are to be displayed then use `tapback -d -v`, these debug messages to the screen are added by me(Mahantesh Salimath). Some of the other logs can be found in /var/log/ directory.
 
 Everything is set-up now :), need to start the guest to see xen and blktap3 in action.
 
 PV guest:
-	1. Download pv_guests/ to your working directory, update the jessie-pv.cfg file with correct path for different parameters and run `xl create jessie-pv.cfg`. This should initiate creation of jessie-pv guest.
+	1. Download pv_guests/ to your working directory, (you can also download the image files from pv_images/ if you don't have one), update the jessie-pv.cfg file with correct attributes for different parameters and run `xl create jessie-pv.cfg`. This should initiate creation of jessie-pv guest.
 
 HVM guest:
 	Will be updated soon...
