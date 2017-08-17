@@ -3,13 +3,14 @@ Patches for xen-4.8.1 to integrate blktap3, Scripts to help make the installatio
 
 Steps followed to get Xen and Blktap3 working in coordination.
 
-1. Install jessie from bmo/internet, if the linux version is old one, update it to the latest version. This is important as blktap3 uses data structures in the linux headers as per the recent release. (My Update was done using linux backports https://backports.debian.org/Instructions/ ).
+1. Install jessie, if the linux version is an old one, update it to the latest version. This is important as blktap3 uses data structures from linux headers as per the recent release. (My Update was done using linux backports https://backports.debian.org/Instructions/ ).
+
 	`sudo apt-get -t jessie-backports install "linux-image-4.9.0-0.bpo.3-amd64"`
 	`sudo apt-get -t jessie-backports install "linux-headers-4.9.0-0.bpo.3-amd64"`
 	`sudo apt-get -t jessie-backports install linux-libc-dev`
 	`sudo reboot`
 
-2. Download(don't install) dkms-blktap-2.0.93-0.8, there is a bug in this package for debian, which will be fixed in the next release. If the next release is available, then download and install that instead of the above mentioned version. However, as of now next release is not available, hence replace the file  device.c in the dkms-blktap tree with blktap2_files/device.c in this repository. Build and install the blktap-2.0.93 now (Google how to build and install dkms packages, if you don't know already). 
+2. Download(don't install) dkms-blktap-2.0.93-0.8, there is a bug in this package for debian, which will be fixed in the next release. If the next release is available, then download and install that instead of the above mentioned version. However, as of now next release is not available, hence replace the file  device.c in the dkms-blktap tree with blktap2_files/device.c in this repository. Build and install the blktap-2.0.93 (Google how to build and install dkms packages, if you don't know already). 
 	NOTE: Goto https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=870007 to read about bug discussed above.
 
 3. (Note: Don't download xen from the git repo mentioned in the below link), only Download and install all the dependencies for xen (along with 'libssl-dev') given in the xen-wiki page:
@@ -19,11 +20,13 @@ Steps followed to get Xen and Blktap3 working in coordination.
 
 	`sudo apt-get build-dep xen`
 
- 	Now download xen-4.8.1 from internet (it is referred as xen-blktap3 below).
+ 	Now download xen-4.8.1 from internet (it is referred as xen-blktap3 below) and apply all the patches in xen-4.8.1-patches/ directory.
+
 	> Create file .config in the xen-blktap3 tree and insert the following line (without quotes). This is required while running pv guests for the pygrub to execute properly.
 	"PYTHON_PREFIX_ARG=--install-layout=deb"
 
 	Run the following commands inside xen to build and install the dependencies for blktap3:
+
 	`./configure --prefix=/usr`
 	`./generic.sh`
 	`sudo ./generic_install.sh`
