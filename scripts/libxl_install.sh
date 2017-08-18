@@ -7,7 +7,7 @@ make -C tools subdir-install-helpers
 make install-xen
 
 ### Create directories and insert scripts in /etc/rc.d to be run at boot. 
-### These are required for xen initialization and startup. 
+### These are required for xen initialization on startup. 
 
 mkdir -p /var/lib/xen
 
