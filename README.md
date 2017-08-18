@@ -13,10 +13,10 @@ Steps followed to get Xen and Blktap3 working in coordination.
 
 	`sudo reboot`
 
-2. Download(don't install) dkms-blktap-2.0.93-0.8, there is a bug in this package for debian, which will be fixed in the next release. If the next release is available, then download and install that instead of the above mentioned version. However, as of now next release is not available, hence replace the file  device.c in the dkms-blktap tree with blktap2_files/device.c in this repository. Build and install the blktap-2.0.93 (Google how to build and install dkms packages, if you don't know already). 
+2. Download (don't install) dkms-blktap-2.0.93-0.8, there is a bug in this package for debian, which will be fixed in the next release. If the next release is available, then download and install that instead of the above mentioned version. However, as of now next release is not available, hence replace the file  device.c in the dkms-blktap tree with blktap2_files/device.c in this repository. Build and install the blktap-2.0.93 (Google how to build and install dkms packages, if you don't know already). 
 	NOTE: Goto https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=870007 to read about bug discussed above.
 
-3. (Note: Don't download xen from the git repo mentioned in the below link), only Download and install all the dependencies for xen (along with 'libssl-dev') given in the xen-wiki page:
+3. (Note: Don't download xen from the git repo mentioned in the below link as blktap3 requires xen-4.8 or higher), only Download and install all the dependencies for xen (along with 'libssl-dev') given in the xen-wiki page:
 	https://wiki.xenproject.org/wiki/Compiling_Xen_From_Source
 
 	`sudo apt-get install build-essential bcc bin86 gawk bridge-utils iproute libcurl3 libcurl4-openssl-dev bzip2 module-init-tools transfig texinfo texlive-latex-base texlive-latex-recommended texlive-fonts-extra texlive-fonts-recommended pciutils-dev mercurial make gcc libc6-dev zlib1g-dev python python-dev python-twisted libncurses5-dev patch libvncserver-dev libsdl-dev libjpeg62-turbo-dev iasl libbz2-dev e2fslibs-dev git-core uuid-dev ocaml ocaml-findlib libx11-dev bison flex xz-utils libyajl-dev gettext libpixman-1-dev libaio-dev markdown pandoc libc6-dev-i386 libssl-dev autoconf automake libtool`
@@ -64,7 +64,7 @@ Steps followed to get Xen and Blktap3 working in coordination.
 Everything is set-up now :), need to start the guest to see xen and blktap3 in action.
 
 PV guest:
-	Download pv_guests/ to your working directory and also download the image files from *pv_images* repository. Update the jessie-pv.cfg file with correct attributes for different parameters and run `xl create jessie-pv.cfg`.
+	Download pv_guests/ to your working directory and also download the image files from *pv_images* (https://github.com/mahantesh-ais/pv_images) repository. Update the jessie-pv.cfg file with correct attributes for different parameters and run `xl create jessie-pv.cfg`. If everything went correct you can see the new domain listed by running `xl list`, you can login using `xl console 'domid'`.
 
 HVM guest:
 	Will be updated soon...
