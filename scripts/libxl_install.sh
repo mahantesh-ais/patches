@@ -1,7 +1,13 @@
 #!/bin/bash
+
+### Install the components depeneding on blktap3
+
 make -C tools subdir-install-libxl
 make -C tools subdir-install-helpers
 make install-xen
+
+### Create directories and insert scripts in /etc/rc.d to be run at boot. 
+### These are required for xen initialization and startup. 
 
 mkdir -p /var/lib/xen
 

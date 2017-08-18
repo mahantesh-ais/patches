@@ -1,4 +1,5 @@
 #!/bin/bash
+### Install all the dependencies for blktap3
 make -C tools subdir-install-include
 make -C tools subdir-install-libs
 make -C tools subdir-install-libxc

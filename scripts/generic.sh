@@ -1,4 +1,5 @@
 #!/bin/bash
+### Build all the dependencies for blktap3
 make -C tools subdir-all-include
 make -C tools subdir-all-libs
 make -C tools subdir-all-libxc
