@@ -64,7 +64,7 @@ Steps followed to get Xen and Blktap3 working in coordination.
 Everything is set-up now :), need to start the guest to see xen and blktap3 in action.
 
 PV guest:
-	Download pv_guests/ to your working directory and also download the image files from *pv_images* (https://github.com/mahantesh-ais/pv_images) repository. Update the jessie-pv.cfg file with correct attributes for different parameters and run `xl create jessie-pv.cfg`. If everything went correct you can see the new domain listed by running `xl list`, you can login using `xl console 'domid'`.
+	Download pv_guests/ to your working directory and also download the image files from *pv_images* (https://github.com/mahantesh-ais/pv_images) repository. Update the jessie-pv.cfg file with correct attributes for different parameters and run `sudo xl create jessie-pv.cfg`. If everything went correct you can see the new domain listed by running `sudo xl list`, you can login using `sudo xl console 'domid'`.
 
 HVM guest:
 	Will be updated soon...
