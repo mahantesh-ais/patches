@@ -14,7 +14,7 @@ Steps followed to get Xen and Blktap3 working in coordination.
 	`sudo reboot`
 
 2. Download and install dkms-blktap-2.0.93-0.9 or higher (https://packages.debian.org/sid/kernel/blktap-dkms).
-	>Prerequietes: dkms
+	>Prerequisites: dkms
 	
 	`sudo apt-get install dkms`
 
