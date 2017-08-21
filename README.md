@@ -14,6 +14,9 @@ Steps followed to get Xen and Blktap3 working in coordination.
 	`sudo reboot`
 
 2. Download and install dkms-blktap-2.0.93-0.9 or higher (https://packages.debian.org/sid/kernel/blktap-dkms).
+	>Prerequietes: dkms
+	
+	`sudo apt-get install dkms`
 
 3. (Note: Don't download xen from the git repo mentioned in the below link as blktap3 requires xen-4.8 or higher), only Download and install all the dependencies for xen (along with 'libssl-dev') given in the xen-wiki page:
 	https://wiki.xenproject.org/wiki/Compiling_Xen_From_Source
@@ -51,8 +54,6 @@ Steps followed to get Xen and Blktap3 working in coordination.
 	`./libxl.sh`
 
 	`sudo ./libxl_install.sh`
-
-	`sudo apt-get install xen-hypervisor`
 
 	`sudo update-grub`
 
