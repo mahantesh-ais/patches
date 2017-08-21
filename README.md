@@ -25,7 +25,7 @@ Steps followed to get Xen and Blktap3 working in coordination.
 
 	`sudo apt-get build-dep xen`
 
- 	Now download xen-4.8.1 (it is referred as xen-blktap3 below) and apply all the patches in xen-4.8.1-patches/ directory.
+ 	Now download xen-4.8.1 or xen-4.9.0 (it is referred as xen-blktap3 henceforth in the document). Apply all the patches in xen-4.X.X/patches and download the scripts from xen-4.X.X/scripts directory and place them inside xen-blktap3 tree.
 
 	> Create file .config in the xen-blktap3 tree and insert the following line (without quotes). This is required while running pv guests for the pygrub to execute properly.
 	

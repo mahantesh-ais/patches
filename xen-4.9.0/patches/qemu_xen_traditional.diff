@@ -1,0 +1,38 @@
+Index: xen-4.9.0/tools/qemu-xen-traditional/xenstore.c
+===================================================================
+--- xen-4.9.0.orig/tools/qemu-xen-traditional/xenstore.c
++++ xen-4.9.0/tools/qemu-xen-traditional/xenstore.c
+@@ -279,13 +279,14 @@ static void xenstore_get_backend_path(ch
+     backend_dompath = xs_get_domain_path(xsh, domid_backend);
+     if (!backend_dompath) goto out;
+     
+-    const char *expected_devtypes[4];
++    const char *expected_devtypes[5];
+     const char **expected_devtype = expected_devtypes;
+ 
+     *expected_devtype++ = devtype;
+     if (!strcmp(devtype, "vbd")) {
+ 	*expected_devtype++ = "tap";
+ 	*expected_devtype++ = "qdisk";
++	*expected_devtype++ = "vbd3";
+     }
+     *expected_devtype = 0;
+     assert(expected_devtype <
+@@ -539,7 +540,7 @@ void xenstore_parse_domain_config(int hv
+         if (drv == NULL)
+             continue;
+         /* Obtain blktap sub-type prefix */
+-        if ((!strcmp(drv, "tap") || !strcmp(drv, "qdisk")) && params[0]) {
++        if ((!strcmp(drv, "tap") || !strcmp(drv, "qdisk") || !strcmp(drv, "vbd3")) && params[0]) {
+             char *offset = strchr(params, ':'); 
+             if (!offset)
+                 continue ;
+@@ -1132,7 +1133,7 @@ void xenstore_process_event(void *opaque
+         if (pasprintf(&buf, "%s/type", bpath) == -1) 
+             goto out;
+         drv = xs_read(xsh, XBT_NULL, buf, &len);
+-	if (drv && (!strcmp(drv, "tap") || !strcmp(drv, "qdisk")) &&
++	if (drv && (!strcmp(drv, "tap") || !strcmp(drv, "qdisk") || !strcmp(drv, "vbd3")) &&
+ 		((offset = strchr(image, ':')) != NULL))
+             memmove(image, offset+1, strlen(offset+1)+1);
+ 
