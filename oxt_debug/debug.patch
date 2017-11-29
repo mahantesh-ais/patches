@@ -1,0 +1,589 @@
+Index: xen-4.9.0/tools/libxl/libxl_disk.c
+===================================================================
+--- xen-4.9.0.orig/tools/libxl/libxl_disk.c
++++ xen-4.9.0/tools/libxl/libxl_disk.c
+@@ -16,7 +16,10 @@
+ 
+ #include "libxl_internal.h"
+ 
++#include <syslog.h>
++
+ #define BACKEND_STRING_SIZE 5
++#define INFO(_fmt, _args...) syslog(LOG_INFO, "%s : %d " _fmt, __FILE__, __LINE__, ##_args);
+ 
+ static void disk_eject_xswatch_callback(libxl__egc *egc, libxl__ev_xswatch *w,
+                                         const char *wpath, const char *epath) {
+@@ -183,7 +186,7 @@ int libxl__device_from_disk(libxl__gc *g
+ 
+     device->backend_domid = disk->backend_domid;
+     device->backend_devid = devid;
+-
++INFO("\n BLKTAP3: disk backend %d \n", disk->backend)
+     switch (disk->backend) {
+         case LIBXL_DISK_BACKEND_PHY:
+             device->backend_kind = LIBXL__DEVICE_KIND_VBD;
+@@ -546,6 +549,7 @@ static int libxl__device_disk_from_xenst
+         LOG(ERROR, "Missing xenstore node %s/type", libxl_path);
+         goto cleanup;
+     }
++INFO("\n BLKTAP3: FETCHING backend, tmp: %s \n", tmp)
+     libxl_string_to_backend(ctx, tmp, &(disk->backend));
+ 
+     disk->vdev = xs_read(ctx->xsh, XBT_NULL,
+@@ -609,7 +613,7 @@ int libxl_vdev_to_device_disk(libxl_ctx
+         goto out;
+     }
+     libxl_path = GCSPRINTF("%s/device/vbd/%d", dom_xl_path, devid);
+-
++INFO("\n BLKTAP3 : LIBXL PATH IS %s \n", libxl_path)
+     rc = libxl__device_disk_from_xenstore(gc, libxl_path, disk);
+ out:
+     GC_FREE;
+@@ -720,13 +724,110 @@ int libxl_device_disk_getinfo(libxl_ctx
+     return rc;
+ }
+ 
++static void libxl_device_xs_rm(libxl_ctx *ctx, libxl__gc *gc, libxl__device *device, uint32_t domid)
++{
++   xs_transaction_t t = XBT_NULL;
++   char *be_path = NULL;
++   char *fe_path = NULL;
++   char *dom_path = NULL;
++
++   dom_path = libxl__xs_get_dompath(gc, domid);
++   fe_path = GCSPRINTF("%s/device/%s/%d", dom_path,
++                     libxl__device_kind_to_string(device->kind),
++                     device->devid);
++
++   dom_path = libxl__xs_get_dompath(gc, device->backend_domid);
++   be_path = GCSPRINTF("%s/backend/%s/%u/%d", dom_path,
++                     libxl__device_kind_to_string(device->backend_kind),
++                     domid, device->devid);
++    INFO("\n BLKTAP3: fe_path %s; be_path %s; \n",fe_path, be_path)
++
++   do {
++    	t = xs_transaction_start(ctx->xsh);
++        libxl__xs_rm_checked(gc, t, be_path);
++        libxl__xs_rm_checked(gc, t, fe_path);
++   } while (xs_transaction_end(ctx->xsh, t, false) == false && errno == EAGAIN);
++   INFO("\n BLKTAP3: old device destroyed from xenstore \n")
++}
++
++static void libxl_device_xs_create(libxl_ctx *ctx, libxl__gc *gc, libxl__device *device, char *vdev, uint32_t domid, char *devpath, char *iso)
++{
++   xs_transaction_t t = XBT_NULL;
++   char *be_path = NULL;
++   char *fe_path = NULL;
++   char *libxl_path = NULL;
++   char *dom_path = NULL;
++   char *libxl_dom_path = NULL;
++
++   struct xs_permissions roperm[2];
++   roperm[0].id = 0;
++   roperm[0].perms = XS_PERM_NONE;
++   roperm[1].id = domid;
++   roperm[1].perms = XS_PERM_READ;
++
++   libxl_dom_path = libxl__xs_libxl_path(gc, domid);
++   libxl_path = GCSPRINTF("%s/device/%s/%d", libxl_dom_path,
++			  libxl__device_kind_to_string(device->kind),
++			  device->devid);
++
++   INFO("\n BLKTAP3: libxl_path is %s \n", libxl_path)
++
++   dom_path = libxl__xs_get_dompath(gc, domid);
++   fe_path = GCSPRINTF("%s/device/%s/%d", dom_path,
++                     libxl__device_kind_to_string(device->kind),
++                     device->devid);
++
++   dom_path = libxl__xs_get_dompath(gc, device->backend_domid);
++   be_path = GCSPRINTF("%s/backend/%s/%u/%d", dom_path,
++                     libxl__device_kind_to_string(device->backend_kind),
++                     domid, device->devid);
++
++   /*rc = libxl__device_destroy(gc, &device);
++   if(rc){
++	INFO("\n BLKTAP3: libxl device destroy failed \n")
++	return rc;
++   }*/
++   INFO("\n BLKTAP3: ENTERING while loop \n")
++   /*write new device */
++   do {
++	t = xs_transaction_start(ctx->xsh);
++        xs_mkdir(ctx->xsh, t, be_path);
++        xs_set_permissions(ctx->xsh, t, be_path, roperm, ARRAY_SIZE(roperm));
++	libxl__xs_printf(gc, t, libxl__sprintf(gc, "%s/physical-device", libxl_path), "fe:%x", libxl__get_tap_minor(gc, LIBXL_DISK_FORMAT_EMPTY, iso));
++	libxl__xs_printf(gc, t, libxl__sprintf(gc, "%s/tapdisk-params", libxl_path), "%s", libxl__sprintf(gc, "aio:%s", iso));
++        libxl__xs_printf(gc, t, libxl__sprintf(gc, "%s/params", be_path), "%s", devpath);
++        libxl__xs_printf(gc, t, libxl__sprintf(gc, "%s/type", be_path), "%s", "tap");
++        libxl__xs_printf(gc, t, libxl__sprintf(gc, "%s/physical-device", be_path), "fe:%x", libxl__get_tap_minor(gc, LIBXL_DISK_FORMAT_EMPTY, iso));
++        libxl__xs_printf(gc, t, libxl__sprintf(gc, "%s/frontend", be_path), "%s", fe_path);
++        libxl__xs_printf(gc, t, libxl__sprintf(gc, "%s/device-type", be_path), "%s", "cdrom");
++        libxl__xs_printf(gc, t, libxl__sprintf(gc, "%s/online", be_path), "%s", "1");
++        libxl__xs_printf(gc, t, libxl__sprintf(gc, "%s/state", be_path), "%s", "1");
++        libxl__xs_printf(gc, t, libxl__sprintf(gc, "%s/removable", be_path), "%s", "1");
++        libxl__xs_printf(gc, t, libxl__sprintf(gc, "%s/mode", be_path), "%s", "r");
++        libxl__xs_printf(gc, t, libxl__sprintf(gc, "%s/frontend-id", be_path), "%u", domid);
++        libxl__xs_printf(gc, t, libxl__sprintf(gc, "%s/dev", be_path), "%s", "hdc");
++        libxl__xs_printf(gc, t, libxl__sprintf(gc, "%s/tapdisk-params", be_path), "%s", libxl__sprintf(gc, "aio:%s", iso));
++
++        xs_mkdir(ctx->xsh, t, fe_path);
++        xs_set_permissions(ctx->xsh, t, fe_path, roperm, ARRAY_SIZE(roperm));
++        libxl__xs_printf(gc, t, libxl__sprintf(gc, "%s/state", fe_path), "%s", "1");
++        libxl__xs_printf(gc, t, libxl__sprintf(gc, "%s/backend-id", fe_path), "%s", "0");
++        libxl__xs_printf(gc, t, libxl__sprintf(gc, "%s/backend", fe_path), "%s", be_path);
++        libxl__xs_printf(gc, t, libxl__sprintf(gc, "%s/virtual-device", fe_path), "%s", vdev);
++        libxl__xs_printf(gc, t, libxl__sprintf(gc, "%s/device-type", fe_path), "%s", "cdrom");
++        libxl__xs_printf(gc, t, libxl__sprintf(gc, "%s/backend-uuid", fe_path), "%s", "00000000-0000-0000-0000-000000000000");
++    } while (xs_transaction_end(ctx->xsh, t, false) == false && errno == EAGAIN);
++
++}
++
+ int libxl_cdrom_change(libxl_ctx *ctx, uint32_t domid, char *iso, libxl_device_disk *olddisk, char *vdev,
+                        const libxl_asyncop_how *ao_how)
+ {
+     AO_CREATE(ctx, domid, ao_how);
+-    int rc = -1;
++    int rc = -1, num;
+     libxl__device device;
+-    libxl_device_disk disk_empty;
++    libxl_device_disk *disks = NULL, disk_saved, disk_empty;
++    libxl_domain_config d_config;
+     xs_transaction_t t = XBT_NULL;
+     char *devpath = NULL;
+     char *be_path = NULL;
+@@ -740,11 +841,10 @@ int libxl_cdrom_change(libxl_ctx *ctx, u
+     memset(&device, 0, sizeof(libxl__device));
+     memset(&disk_empty, 0, sizeof(libxl_device_disk));
+ 
+-    struct xs_permissions roperm[2];
+-    roperm[0].id = 0;
+-    roperm[0].perms = XS_PERM_NONE;
+-    roperm[1].id = stubdomid;
+-    roperm[1].perms = XS_PERM_READ;
++    libxl_domain_config_init(&d_config);
++    libxl_device_disk_init(&disk_saved);
++    libxl_device_disk_copy(ctx, &disk_saved, olddisk);
++    disks = libxl_device_disk_list(ctx, domid, &num);
+ 
+     /* get our empty disk setup */
+     libxl_device_disk_init(&disk_empty);
+@@ -762,6 +862,8 @@ int libxl_cdrom_change(libxl_ctx *ctx, u
+ 
+     /* tap iso, if it's already tapped it will return the existing tap */
+     devpath = libxl__blktap_devpath(gc, iso, LIBXL_DISK_FORMAT_EMPTY, "/config/platform-crypto-keys");
++    INFO("\n BLKTAP3: devpath is %s \n", devpath)
++    INFO("\n BLKTAP3: stubdom-id is %d, pdev_path: %s, vdev: %s \n", (int)stubdomid, olddisk->pdev_path, olddisk->vdev)
+ 
+     rc = libxl__device_from_disk(gc, stubdomid, olddisk, &device);
+     if (rc){
+@@ -770,76 +872,86 @@ int libxl_cdrom_change(libxl_ctx *ctx, u
+     }
+     /* insert empty cdrom */
+     libxl__qmp_insert_cdrom(gc, domid, &disk_empty);
++    INFO("\n BLKTAP3: empty disk inserted , %s \n", libxl__device_kind_to_string(device.backend_kind))
+ 
+     be_path = libxl__device_backend_path(gc, &device);
++    INFO("\n BLKTAP3 : BEPATH %s \n", be_path)
+     fe_path = libxl__device_frontend_path(gc, &device);
++   /* asprintf(&be_path, "/local/domain/0/backend/vbd3/%d/5632", stubdomid); */
++    tmp = libxl__xs_read(gc, t, libxl__sprintf(gc, "%s/tapdisk-params", be_path));
+ 
+     /* disconnect iso for now */
+-    do {
++   do {
+         t = xs_transaction_start(ctx->xsh);
+         tmp = libxl__xs_read(gc, t, libxl__sprintf(gc, "%s/tapdisk-params", be_path));
+-        libxl__xs_printf(gc, t, libxl__sprintf(gc, "%s/online", be_path), "%s", "0");
+-        libxl__xs_printf(gc, t, libxl__sprintf(gc, "%s/state", be_path), "%s", "5");
+-    } while (xs_transaction_end(ctx->xsh, t, false) == false && errno == EAGAIN);
+-
++     	libxl__xs_printf(gc, t, libxl__sprintf(gc, "%s/online", be_path), "%s", "0");
++     	libxl__xs_printf(gc, t, libxl__sprintf(gc, "%s/state", be_path), "%s", "5");
++   } while (xs_transaction_end(ctx->xsh, t, false) == false && errno == EAGAIN);
+     /* make sure we're disconnected */
+-    while(1) {
+-        be_state = libxl__xs_read(gc, XBT_NULL, libxl__sprintf(gc, "%s/state", be_path));
++   while(1) {
++	INFO("\n BLKTAP3: waiting for close \n")
++  	be_state = libxl__xs_read(gc, XBT_NULL, libxl__sprintf(gc, "%s/state", be_path));
+         fe_state = libxl__xs_read(gc, XBT_NULL, libxl__sprintf(gc, "%s/state", fe_path));
+         if(!strcmp(be_state, "6") && !strcmp(fe_state, "6"))
+             break;
+         sleep(1);
+-    }
+-
+-    /* Destroy old xenbus */
+-    do {
+-        t = xs_transaction_start(ctx->xsh);
+-        libxl__xs_rm_checked(gc, t, be_path);
+-        libxl__xs_rm_checked(gc, t, fe_path);
+-    } while (xs_transaction_end(ctx->xsh, t, false) == false && errno == EAGAIN);
++   }
++   INFO("\n BLKTAP3: old device closed \n")
++   be_state = libxl__xs_read(gc, XBT_NULL, libxl__sprintf(gc, "%s/state", be_path));
++   /* cleanup old tap if it's not shared with anyone else */
+ 
+-    /* cleanup old tap if it's not shared with anyone else */
+-    if(!tapdev_is_shared(gc, tmp))
++   INFO("\n BLKTAP3: tapdisk being destoryed \n")
++   if(!tapdev_is_shared(gc, tmp))
+         libxl__device_destroy_tapdisk(gc, tmp, stubdomid);
+ 
+-    /*write new device */
+-    do {
+-        t = xs_transaction_start(ctx->xsh);
+-        xs_mkdir(ctx->xsh, t, be_path);
+-        xs_set_permissions(ctx->xsh, t, be_path, roperm, ARRAY_SIZE(roperm));
+-        libxl__xs_printf(gc, t, libxl__sprintf(gc, "%s/params", be_path), "%s", devpath);
+-        libxl__xs_printf(gc, t, libxl__sprintf(gc, "%s/type", be_path), "%s", "phy");
+-        libxl__xs_printf(gc, t, libxl__sprintf(gc, "%s/physical-device", be_path), "fe:%x", libxl__get_tap_minor(gc, LIBXL_DISK_FORMAT_EMPTY, iso));
+-        libxl__xs_printf(gc, t, libxl__sprintf(gc, "%s/frontend", be_path), "%s", fe_path);
+-        libxl__xs_printf(gc, t, libxl__sprintf(gc, "%s/device-type", be_path), "%s", "cdrom");
+-        libxl__xs_printf(gc, t, libxl__sprintf(gc, "%s/online", be_path), "%s", "1");
+-        libxl__xs_printf(gc, t, libxl__sprintf(gc, "%s/state", be_path), "%s", "1");
+-        libxl__xs_printf(gc, t, libxl__sprintf(gc, "%s/removable", be_path), "%s", "1");
+-        libxl__xs_printf(gc, t, libxl__sprintf(gc, "%s/mode", be_path), "%s", "1");
+-        libxl__xs_printf(gc, t, libxl__sprintf(gc, "%s/frontend-id", be_path), "%u", stubdomid);
+-        libxl__xs_printf(gc, t, libxl__sprintf(gc, "%s/dev", be_path), "%s", "hdc");
+-        libxl__xs_printf(gc, t, libxl__sprintf(gc, "%s/tapdisk-params", be_path), "%s", libxl__sprintf(gc, "aio:%s", iso));
++   libxl_device_xs_rm(ctx, gc, &device, domid);
++   if(stubdomid >= 0) {
++   	libxl_device_xs_rm(ctx, gc, &device, stubdomid);
++   }
++
++   INFO("\n BLKTAP3: Reading domain configuration \n")
++   /* Update the json config file. This is important as config file bears higher precidence than xenstore */
++//    rc = libxl__get_domain_configuration(gc, domid, &d_config);
++//    if (rc) goto out;
+ 
+-        roperm[0].id = stubdomid;
+-        roperm[1].id = 0;
+-        xs_mkdir(ctx->xsh, t, fe_path);
+-        xs_set_permissions(ctx->xsh, t, fe_path, roperm, ARRAY_SIZE(roperm));
+-        libxl__xs_printf(gc, t, libxl__sprintf(gc, "%s/state", fe_path), "%s", "1");
+-        libxl__xs_printf(gc, t, libxl__sprintf(gc, "%s/backend-id", fe_path), "%s", "0");
+-        libxl__xs_printf(gc, t, libxl__sprintf(gc, "%s/backend", fe_path), "%s", be_path);
+-        libxl__xs_printf(gc, t, libxl__sprintf(gc, "%s/virtual-device", fe_path), "%s", vdev);
+-        libxl__xs_printf(gc, t, libxl__sprintf(gc, "%s/device-type", fe_path), "%s", "cdrom");
+-        libxl__xs_printf(gc, t, libxl__sprintf(gc, "%s/backend-uuid", fe_path), "%s", "00000000-0000-0000-0000-000000000000");
+-     } while (xs_transaction_end(ctx->xsh, t, false) == false && errno == EAGAIN);
++    INFO("\n BLKTAP3: Read domain configuration \n")
++
++    DEVICE_ADD(disk, disks, domid, &disk_saved, COMPARE_DISK, &d_config);
++    INFO("\n BLKTAP3: disk added to configuration \n")
+ 
+-    /* tell qemu to remount /dev/xvdc */
+-    libxl__qmp_change_cdrom(gc, domid, olddisk);
++    rc = libxl__dm_check_start(gc, &d_config, domid);
++    if (rc) goto out;
++    INFO("\n BLKTAP3: check started the dm \n")
++
++   rc = libxl__set_domain_configuration(gc, domid, &d_config);
++   if (rc) goto out;
++
++   INFO("\n BLKTAP3: Set domain configuration \n")
++   libxl_device_xs_create(ctx, gc, &device, vdev, domid, devpath, iso);
++   if(stubdomid >= 0) {
++   	libxl_device_xs_create(ctx, gc, &device, vdev, stubdomid, devpath, iso);
++   }
++    INFO("\n BLKTAP3: waiting for backend connection \n")
++    rc = libxl__wait_for_backend(gc, be_path, GCSPRINTF("%d", XenbusStateConnected));
++    if (rc < 0)
++        goto out;
++
++   INFO("\n BLKTAP3: wrote new device \n")
++   /* tell qemu to remount /dev/xvdc */
++   libxl__qmp_change_cdrom(gc, domid, olddisk);
++   libxl__qmp_change_cdrom(gc, stubdomid, olddisk);
+ 
+-    libxl__ao_complete(egc, ao, 0);
++   INFO("\n BLKTAP3: qemu remount device \n")
++
++   libxl__ao_complete(egc, ao, 0);
+ out:
+-    if (lock) libxl__unlock_domain_userdata(lock);
+-    if (rc) return AO_CREATE_FAIL(rc);
+-    return AO_INPROGRESS;
++   INFO("\n BLKTAP3: Coming out of the function\n")
++    libxl_device_disk_dispose(&disk_saved);
++    libxl_device_disk_dispose(&disk_empty);
++    libxl_domain_config_dispose(&d_config);
++   if (lock) libxl__unlock_domain_userdata(lock);
++   if (rc) return AO_CREATE_FAIL(rc);
++   return AO_INPROGRESS;
+ }
+ 
+ int libxl_cdrom_insert(libxl_ctx *ctx, uint32_t domid, libxl_device_disk *disk,
+Index: xen-4.9.0/tools/libxl/libxl_blktap3.c
+===================================================================
+--- xen-4.9.0.orig/tools/libxl/libxl_blktap3.c
++++ xen-4.9.0/tools/libxl/libxl_blktap3.c
+@@ -17,8 +17,11 @@
+ 
+ #include <tap-ctl.h>
+ 
++#include <syslog.h>
++
+ #include "list.h"   /* include for list_head structure */
+ 
++#define INFO(_fmt, _args...) syslog(LOG_INFO, "%s : %d " _fmt , __FILE__, __LINE__, ##_args);
+ static int blktap_find(const char *type, const char *path, struct tap_list *tap)
+ {
+     struct list_head list; /* Note: structure name updated */
+@@ -86,6 +89,7 @@ char *libxl__blktap_devpath(libxl__gc *g
+     type = libxl__device_disk_string_of_format(format);
+     if (!(err = blktap_find(type, disk, &tap))) {
+         LOG(DEBUG, "found tapdisk\n");
++	INFO("\n BLKTAP3: found tapdisk for disk %s \n", disk)
+ 	devname = libxl__sprintf(gc, "/dev/xen/blktap-2/tapdev%d", tap.minor);
+         if (devname)
+             return devname;
+@@ -105,6 +109,7 @@ char *libxl__blktap_devpath(libxl__gc *g
+ 
+     /* tap_ctl_create(params, 0, -1, NULL) --> old function call  */
+     if (!(err = tap_ctl_create(params, &devname, flags, -1, 0, 0))) {
++	INFO("\n BLKTAP3: created tapdisk for disk %s \n", disk)
+         LOG(DEBUG, "created tapdisk\n");
+         return devname; /*revert-back-changes*/
+     }
+@@ -150,6 +155,7 @@ int libxl__device_destroy_tapdisk(libxl_
+ 
+     disk = strchr(be_path, ':');
+     if (!disk) {
++	INFO("\n BLKTAP3: Unable to parse params \n")
+         LOG(ERROR, "Unable to parse params %s", be_path);
+         return ERROR_INVAL;
+     }
+@@ -158,23 +164,27 @@ int libxl__device_destroy_tapdisk(libxl_
+ 
+     err = blktap_find(be_path, disk, &tap);
+     if (err < 0) {
++	INFO("\n BLKTAP3: blktap_find failed \n")
+         /* returns -errno */
+         LOGEV(ERROR, -err, "Unable to find type %s disk %s", be_path, disk);
+         return ERROR_FAIL;
+     }
+     /* We're using the tapdev. If anybody else also is, we can't destroy it! */
+     if (tapdev_is_shared(gc, be_path)) {
++	INFO("\n BLKTAP3: device is shared, hence not destroyed \n")
+         LOG(DEBUG, "Not destroying tapdev%d, another VM uses it", tap.minor);
+         return 0;
+     }
+ 
+     err = tap_ctl_destroy(tap.pid, tap.minor, 0, NULL);
+     if (err < 0) {
++	INFO("\n BLKTAP3: tap-ctl destroy error \n")
+         LOGEV(ERROR, -err, "Failed to destroy tap device id %d minor %d",
+               tap.pid, tap.minor);
+         return ERROR_FAIL;
+     }
+ 
++    INFO("\n BLKTAP3: Device destroyed successfully \n")
+     return 0;
+ }
+ 
+Index: xen-4.9.0/tools/libxl/libxl_device.c
+===================================================================
+--- xen-4.9.0.orig/tools/libxl/libxl_device.c
++++ xen-4.9.0/tools/libxl/libxl_device.c
+@@ -18,6 +18,9 @@
+ 
+ #include "libxl_internal.h"
+ 
++#include <syslog.h>
++
++#define INFO(_fmt, _args...) syslog(LOG_INFO, "%s : %d " _fmt, __FILE__, __LINE__, ##_args);
+ char *libxl__device_frontend_path(libxl__gc *gc, libxl__device *device)
+ {
+     char *dom_path = libxl__xs_get_dompath(gc, device->domid);
+@@ -418,7 +421,7 @@ char *libxl__device_disk_string_of_backe
+ {
+     switch (backend) {
+         case LIBXL_DISK_BACKEND_QDISK: return "qdisk";
+-        case LIBXL_DISK_BACKEND_TAP: return "phy";
++        case LIBXL_DISK_BACKEND_TAP: return "tap";
+         case LIBXL_DISK_BACKEND_PHY: return "phy";
+         default: return NULL;
+     }
+@@ -726,6 +729,7 @@ int libxl__device_destroy(libxl__gc *gc,
+         /* May not exist if this is not a tap device */
+         if (tapdisk_path) {
+             rc = libxl__xs_read_checked(gc, t, tapdisk_path, &tapdisk_params);
++	    INFO("\n BLKTAP3: tapdisk params: %s \n", tapdisk_params)
+             if (rc) goto out;
+         }
+ 
+@@ -734,6 +738,7 @@ int libxl__device_destroy(libxl__gc *gc,
+              * The toolstack domain is in charge of removing the
+              * frontend and libxl paths.
+              */
++	    INFO("\n BLKTAP3: libxl_toolstack_domid \n")
+             if (!libxl_only)
+                 libxl__xs_path_cleanup(gc, t, fe_path);
+             libxl__xs_path_cleanup(gc, t, libxl_path);
+@@ -743,6 +748,7 @@ int libxl__device_destroy(libxl__gc *gc,
+              * The driver domain is in charge of removing what it can
+              * from the backend path.
+              */
++	    INFO("\n BLKTAP3: backend domid \n")
+             libxl__xs_path_cleanup(gc, t, be_path);
+         }
+ 
+Index: xen-4.9.0/tools/xl/xl_cdrom.c
+===================================================================
+--- xen-4.9.0.orig/tools/xl/xl_cdrom.c
++++ xen-4.9.0/tools/xl/xl_cdrom.c
+@@ -16,6 +16,7 @@
+ #include <sys/types.h>
+ #include <sys/stat.h>
+ #include <unistd.h>
++#include <syslog.h>
+ 
+ #include <libxl.h>
+ #include <libxl_utils.h>
+@@ -25,6 +26,8 @@
+ #include "xl_utils.h"
+ #include "xl_parse.h"
+ 
++#define INFO(_fmt, _args...) syslog(LOG_INFO, "%s : %d " _fmt, __FILE__, __LINE__, ##_args);
++
+ static int cd_insert(uint32_t domid, const char *virtdev, char *phys)
+ {
+     libxl_device_disk disk;
+@@ -47,6 +50,7 @@ static int cd_insert(uint32_t domid, con
+     xasprintf(&buf, "vdev=%s,access=r,devtype=cdrom,target=%s",
+               virtdev, phys ? phys : "");
+ 
++    INFO("\n BLKTAP3: BUF is %s \n", buf)
+     parse_disk_config(&config, buf, &disk);
+ 
+     stubdomid = libxl_get_stubdom_id(ctx, domid);
+@@ -60,6 +64,7 @@ static int cd_insert(uint32_t domid, con
+             for (i=0; i<nb; i++) {
+                 if (!libxl_device_disk_getinfo(ctx, domid, &disks[i], &diskinfo)) {
+                     xasprintf(&xspath, "%s/dev", diskinfo.backend);
++		    INFO("\n BLKTAP3: XSPATH IS %s \n", xspath)
+                     if (!xspath) {
+                         r = 0;
+                         goto out;
+@@ -78,7 +83,7 @@ static int cd_insert(uint32_t domid, con
+             free(disks);
+         }
+         xasprintf(&strdevid, "%d", devid);
+-
++	INFO("\n BLKTAP3 : DEVID is %d \n", devid)
+         libxl_vdev_to_device_disk(ctx, domid, strdevid, &olddisk);
+ 
+         libxl_cdrom_change(ctx, domid, phys, &olddisk, strdevid, NULL);
+@@ -148,7 +153,7 @@ int main_cd_insert(int argc, char **argv
+     domid = find_domain(argv[optind]);
+     virtdev = argv[optind + 1];
+     file = argv[optind + 2];
+-
++    INFO("\n BLKTAP3: main cd insert function invoked \n")
+     if (cd_insert(domid, virtdev, file))
+         return EXIT_FAILURE;
+ 
+Index: xen-4.9.0/tools/libxl/libxl_utils.c
+===================================================================
+--- xen-4.9.0.orig/tools/libxl/libxl_utils.c
++++ xen-4.9.0/tools/libxl/libxl_utils.c
+@@ -16,6 +16,7 @@
+ #include "libxl_osdeps.h" /* must come before any other headers */
+ 
+ #include <ctype.h>
++#include <syslog.h>
+ 
+ #include "libxl_internal.h"
+ #include "_paths.h"
+@@ -23,6 +24,8 @@
+ #ifndef LIBXL_HAVE_NONCONST_LIBXL_BASENAME_RETURN_VALUE
+ const
+ #endif
++
++#define INFO(_fmt, _args...) syslog(LOG_INFO, "%s : %d " _fmt, __FILE__, __LINE__, ##_args);
+ char *libxl_basename(const char *name)
+ {
+     const char *filename;
+@@ -364,6 +367,8 @@ int libxl_string_to_backend(libxl_ctx *c
+     } else if (!strcmp(s, "qdisk")) {
+         *backend = LIBXL_DISK_BACKEND_QDISK;
+     } else if (!strcmp(s, "tap")) {
++        *backend = LIBXL_DISK_BACKEND_TAP;
++	INFO("\n BLKTAP3: BACKEND IS assigned with TAP \n")
+         p = strchr(s, ':');
+         if (!p) {
+             rc = ERROR_INVAL;
+@@ -381,6 +386,7 @@ int libxl_string_to_backend(libxl_ctx *c
+         }
+     }
+ out:
++INFO("\n BLKTAP3: BACKEND IS %d \n", *backend)
+     return rc;
+ }
+ 
+Index: xen-4.9.0/tools/libxl/libxl_qmp.c
+===================================================================
+--- xen-4.9.0.orig/tools/libxl/libxl_qmp.c
++++ xen-4.9.0/tools/libxl/libxl_qmp.c
+@@ -22,11 +22,14 @@
+ 
+ #include <sys/un.h>
+ 
++#include <syslog.h>
++
+ #include <yajl/yajl_gen.h>
+ 
+ #include "_libxl_list.h"
+ #include "libxl_internal.h"
+ 
++#define INFO(_fmt, _args...) syslog(LOG_INFO, "%s : %d " _fmt, __FILE__, __LINE__, ##_args);
+ /* #define DEBUG_RECEIVED */
+ 
+ #ifdef DEBUG_RECEIVED
+@@ -981,6 +984,7 @@ int libxl__qmp_change_cdrom(libxl__gc *g
+     libxl__json_object *args = NULL;
+     int dev_number = libxl__device_disk_dev_number(disk->vdev, NULL, NULL);
+ 
++    INFO("\n BLKTAP3 : qmp_change: dev number %d \n", dev_number)
+     QMP_PARAMETERS_SPRINTF(&args, "device", "ide-%i", dev_number);
+     qmp_parameters_add_string(gc, &args, "target", "/dev/xvdc");
+     return qmp_run_command(gc, domid, "change", args, NULL, NULL);
+Index: xen-4.9.0/extras/mini-os/blkfront.c
+===================================================================
+--- xen-4.9.0.orig/extras/mini-os/blkfront.c
++++ xen-4.9.0/extras/mini-os/blkfront.c
+@@ -16,6 +16,7 @@
+ #include <mini-os/blkfront.h>
+ #include <mini-os/lib.h>
+ #include <fcntl.h>
++#include <syslog.h>
+ 
+ /* Note: we generally don't need to disable IRQs since we hardly do anything in
+  * the interrupt handler.  */
+@@ -26,7 +27,7 @@ DECLARE_WAIT_QUEUE_HEAD(blkfront_queue);
+ 
+ 
+ 
+-
++#define INFO(_fmt, _args...) syslog(LOG_INFO, "%s : %d " _fmt, __FILE__, __LINE__, ##_args);
+ #define BLK_RING_SIZE __RING_SIZE((struct blkif_sring *)0, PAGE_SIZE)
+ #define GRANT_INVALID_REF 0
+ 
+@@ -98,6 +99,7 @@ struct blkfront_dev *init_blkfront(char
+     char path[strlen(nodename) + strlen("/backend-id") + 1];
+ 
+     printk("******************* BLKFRONT for %s **********\n\n\n", nodename);
++    INFO("\n BLKFRONT: shutdown blkfront \n")
+ 
+     dev = malloc(sizeof(*dev));
+     memset(dev, 0, sizeof(*dev));
+@@ -254,6 +256,7 @@ void shutdown_blkfront(struct blkfront_d
+ 
+     blkfront_sync(dev);
+ 
++    INFO("\n BLKFRONT: shutdown blkfront \n")
+     printk("close blk: backend=%s node=%s\n", dev->backend, dev->nodename);
+ 
+     snprintf(path, sizeof(path), "%s/state", dev->backend);

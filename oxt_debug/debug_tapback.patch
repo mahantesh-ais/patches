@@ -1,0 +1,233 @@
+Index: blktap3/tapback/backend.c
+===================================================================
+--- blktap3.orig/tapback/backend.c
++++ blktap3/tapback/backend.c
+@@ -1,4 +1,4 @@
+-/*
++/**
+  * Copyright (c) 2016, Citrix Systems, Inc.
+  *
+  * All rights reserved.
+@@ -39,7 +39,9 @@
+ #include <unistd.h>
+ #include <signal.h>
+ #include <stdlib.h>
++#include <syslog.h>
+ 
++#define INF(_fmt, _args...) syslog(LOG_INFO, "%s : %d " _fmt, __FILE__, __LINE__, ##_args);
+ extern int tapdev_major;
+ 
+ /**
+@@ -53,6 +55,7 @@ tapback_device_unwatch_frontend_state(vb
+ {
+     ASSERT(device);
+ 
++    INF("\n TAPBACK: unwatch frontend %s with backend %s \n", device->frontend_path, device->backend->path)
+     if (device->frontend_state_path)
+ 		/* TODO check return code */
+         xs_unwatch(device->backend->xs, device->frontend_state_path,
+@@ -313,8 +316,9 @@ physical_device_changed(vbd_t *device) {
+         goto out;
+     }
+ 
++    WARN(device, " DEVICE BACKEND DOMID %d ", device->backend->domid);
+     if ((device->major >= 0 || device->minor >= 0) &&
+-            (major != device->major || minor != device->minor)) {
++            (major != device->major)) {
+         WARN(device, "changing physical device from %x:%x to %x:%x not "
+                 "supported\n", device->major, device->minor, major, minor);
+         err = -ENOSYS;
+@@ -452,6 +456,7 @@ frontend(vbd_t *device) {
+         goto out;
+     }
+ 
++    INF("\n TAPBACK: watching frontend path %s with backend path %s \n", device->frontend_path, device->backend->path)
+ out:
+     if (err) {
+         free(device->frontend_path);
+@@ -955,7 +960,7 @@ tapback_backend_handle_backend_watch(bac
+     /*
+      * path is something like "backend/vbd/domid/devid"
+      */
+-
++    INF("\n TAPBACK: The path is %s \n", path)
+     s = strtok(_path, "/");
+ 	if (unlikely(!s)) {
+ 		WARN(NULL, "invalid path %s\n", _path);
+@@ -996,13 +1001,14 @@ tapback_backend_handle_backend_watch(bac
+     else
+         exists = true;
+     err = 0;
+-
++    INF("\n TAPBACK: BACKEND domid %d \n",backend->domid)
+     /*
+      * Master tapback: check if there's tapback for this domain. If there isn't
+      * one, create it, otherwise ignore this event, the per-domain tapback will
+      * take care of it.
+      */
+     if (tapback_is_master(backend)) {
++	INF("\n TAPBACK: Finding slave \n")
+         struct backend_slave *slave = tapback_find_slave(backend, domid),
+                              **_slave = NULL;
+ 
+@@ -1011,11 +1017,13 @@ tapback_backend_handle_backend_watch(bac
+             /*
+              * remove the slave
+              */
++	    INF("\n TAPBACK: path not exists, removing the slave \n")
+             tdelete(slave, &backend->master.slaves, compare);
+             free(slave);
+         }
+         else if (exists && !slave) {
+             pid_t pid;
++	    INF("\n TAPBACK: path exists, creating the slave \n")
+ 
+             DBG(NULL, "need to create slave for domain %d\n", domid);
+ 
+@@ -1052,7 +1060,7 @@ tapback_backend_handle_backend_watch(bac
+             } else { /* child */
+                 char *args[7];
+                 int i = 0;
+-
++		INF("\n TAPBACK : Creating new tapback \n")
+                 args[i++] = (char*)tapback_name;
+                 args[i++] = "-d";
+                 args[i++] = "-x";
+@@ -1072,12 +1080,14 @@ tapback_backend_handle_backend_watch(bac
+                  * the build system supply it.
+                  */
+                 err = execvp(tapback_name, args);
++		INF("\n TAPBACK: RETURNED FROM EXECVP \n")
+                 err = -errno;
+                 WARN(NULL, "failed to replace master process with slave: %s\n",
+                         strerror(-err));
+                 abort();
+             }
+         }
++	INF("\n TAPBACK: Slave found, master returning \n")
+         err = 0;
+     } else {
+         char *device = NULL;
+@@ -1089,6 +1099,7 @@ tapback_backend_handle_backend_watch(bac
+              * The entire domain may be removed in one go, so we need to tear
+              * down all devices.
+              */
++	    INF("\n TAPBACK: entire domain may be removed  \n")
+             err = tapback_probe_domain(backend, domid);
+             if (err)
+                 WARN(NULL, "failed to probe domain: %s\n", strerror(-err));
+@@ -1096,15 +1107,18 @@ tapback_backend_handle_backend_watch(bac
+             /*
+              * Time to go.
+              */
+-            INFO(NULL, "domain removed, exit\n");
+-            tapback_backend_destroy(backend);
+-            exit(EXIT_SUCCESS);
+-
++	    if(list_empty(&backend->slave.slave.devices)) {
++            	INFO(NULL, "domain removed, exit\n");
++		INF("\n TAPBACK: domain removed \n")
++            	tapback_backend_destroy(backend);
++            	exit(EXIT_SUCCESS);
+             /*
+              * R.I.P.
+              */
++	    }
+         }
+ 
++	INF("\n TAPBACK: new domain  \n")
+         /*
+          * There's no device yet, the domain just got created, nothing to do
+          * just yet. However, the entire sub-tree might have gotten created
+@@ -1113,6 +1127,7 @@ tapback_backend_handle_backend_watch(bac
+          */
+         device = strtok(NULL, "/");
+         if (!device) {
++	    INF("\n TAPBACK: No device \n")
+             err = tapback_probe_domain(backend, domid);
+             goto out;
+         }
+Index: blktap3/tapback/frontend.c
+===================================================================
+--- blktap3.orig/tapback/frontend.c
++++ blktap3/tapback/frontend.c
+@@ -34,7 +34,9 @@
+ #include "tapback.h"
+ 
+ #include <xen/io/protocols.h>
++#include <syslog.h>
+ #include "xen_blkif.h"
++#define INF(_fmt, _args...) syslog(LOG_INFO, "%s : %d " _fmt, __FILE__, __LINE__, ##_args);
+ 
+ /**
+  * Switches the back-end state of the device by writing to XenStore.
+@@ -444,7 +446,9 @@ frontend_changed(vbd_t * const device, c
+             break;
+         case XenbusStateInitialised:
+     	case XenbusStateConnected:
++	    INF("\n TAPBACK : xenbus initialized/connected for %s \n", device->frontend_path)
+             if (device->state != XenbusStateConnected) {
++	        INF("\n TAPBACK : xenbus for %s \n", device->frontend_path)
+                 DBG(device, "connecting to front-end\n");
+                 err = xenbus_connect(device);
+             } else
+@@ -454,6 +458,7 @@ frontend_changed(vbd_t * const device, c
+             err = xenbus_switch_state(device, XenbusStateClosing);
+             break;
+         case XenbusStateClosed:
++	    INF("\n TAPBACK: xenbus closed for %s \n", device->frontend_path)
+             err = backend_close(device);
+             break;
+         case XenbusStateUnknown:
+Index: blktap3/tapback/tapback.c
+===================================================================
+--- blktap3.orig/tapback/tapback.c
++++ blktap3/tapback/tapback.c
+@@ -55,6 +55,8 @@
+ #include "tapback.h"
+ #include <signal.h>
+ 
++#define INF(_fmt, _args...) syslog(LOG_INFO, "%s : %d " _fmt, __FILE__, __LINE__, ##_args);
++
+ const char tapback_name[] = "tapback";
+ unsigned log_level;
+ int tapdev_major;
+@@ -155,7 +157,7 @@ tapback_backend_destroy(backend_t *backe
+ {
+ 	if (!backend)
+ 		return;
+-
++    INF("\n TAPBACK: BACKEND DESTROY INVOKED \n")
+     if (backend->pidfile) {
+         unlink(backend->pidfile);
+         free(backend->pidfile);
+@@ -198,7 +200,7 @@ tapback_signal_handler(int signum, sigin
+ 
+ 		list_for_each_entry_safe(backend, tmp, &backends, entry)
+ 			tapback_backend_destroy(backend);
+-
++	INF("\n exiting because of signal handler \n")
+         _exit(EXIT_SUCCESS);
+     }
+ }
+@@ -461,10 +463,10 @@ tapback_backend_run(backend_t *backend)
+             if (likely(errno == EINTR))
+                 continue;
+             err = -errno;
++	    INF("\n TAPBACK: Montoring Error   \n")
+             WARN(NULL, "error monitoring XenStore: %s\n", strerror(-err));
+             break;
+         }
+-
+         if (FD_ISSET(fd, &rfds))
+             tapback_read_watch(backend);
+         DBG(NULL, "--\n");
+@@ -693,7 +695,7 @@ int main(int argc, char **argv)
+     }
+ 
+     err = tapback_backend_run(backend);
+-
++    INF("\n TAPBACK: RETURNING FROM MAIN \n")
+     tapback_backend_destroy(backend);
+ 
+ fail:
