@@ -115,7 +115,7 @@ Index: xen-4.9.0/tools/libxl/libxl_disk.c
 +	libxl__xs_printf(gc, t, libxl__sprintf(gc, "%s/physical-device", libxl_path), "fe:%x", libxl__get_tap_minor(gc, LIBXL_DISK_FORMAT_EMPTY, iso));
 +	libxl__xs_printf(gc, t, libxl__sprintf(gc, "%s/tapdisk-params", libxl_path), "%s", libxl__sprintf(gc, "aio:%s", iso));
 +        libxl__xs_printf(gc, t, libxl__sprintf(gc, "%s/params", be_path), "%s", devpath);
-+        libxl__xs_printf(gc, t, libxl__sprintf(gc, "%s/type", be_path), "%s", "tap");
++        libxl__xs_printf(gc, t, libxl__sprintf(gc, "%s/type", be_path), "%s", "phy");
 +        libxl__xs_printf(gc, t, libxl__sprintf(gc, "%s/physical-device", be_path), "fe:%x", libxl__get_tap_minor(gc, LIBXL_DISK_FORMAT_EMPTY, iso));
 +        libxl__xs_printf(gc, t, libxl__sprintf(gc, "%s/frontend", be_path), "%s", fe_path);
 +        libxl__xs_printf(gc, t, libxl__sprintf(gc, "%s/device-type", be_path), "%s", "cdrom");
@@ -177,7 +177,7 @@ Index: xen-4.9.0/tools/libxl/libxl_disk.c
  
      rc = libxl__device_from_disk(gc, stubdomid, olddisk, &device);
      if (rc){
-@@ -770,76 +872,86 @@ int libxl_cdrom_change(libxl_ctx *ctx, u
+@@ -770,76 +872,67 @@ int libxl_cdrom_change(libxl_ctx *ctx, u
      }
      /* insert empty cdrom */
      libxl__qmp_insert_cdrom(gc, domid, &disk_empty);
@@ -252,10 +252,14 @@ Index: xen-4.9.0/tools/libxl/libxl_disk.c
 +   	libxl_device_xs_rm(ctx, gc, &device, stubdomid);
 +   }
 +
-+   INFO("\n BLKTAP3: Reading domain configuration \n")
-+   /* Update the json config file. This is important as config file bears higher precidence than xenstore */
-+//    rc = libxl__get_domain_configuration(gc, domid, &d_config);
-+//    if (rc) goto out;
++   libxl_device_xs_create(ctx, gc, &device, vdev, domid, devpath, iso);
++   if(stubdomid >= 0) {
++   	libxl_device_xs_create(ctx, gc, &device, vdev, stubdomid, devpath, iso);
++   }
++    INFO("\n BLKTAP3: waiting for backend connection \n")
++    rc = libxl__wait_for_backend(gc, be_path, GCSPRINTF("%d", XenbusStateConnected));
++    if (rc < 0)
++        goto out;
  
 -        roperm[0].id = stubdomid;
 -        roperm[1].id = 0;
@@ -268,38 +272,15 @@ Index: xen-4.9.0/tools/libxl/libxl_disk.c
 -        libxl__xs_printf(gc, t, libxl__sprintf(gc, "%s/device-type", fe_path), "%s", "cdrom");
 -        libxl__xs_printf(gc, t, libxl__sprintf(gc, "%s/backend-uuid", fe_path), "%s", "00000000-0000-0000-0000-000000000000");
 -     } while (xs_transaction_end(ctx->xsh, t, false) == false && errno == EAGAIN);
-+    INFO("\n BLKTAP3: Read domain configuration \n")
-+
-+    DEVICE_ADD(disk, disks, domid, &disk_saved, COMPARE_DISK, &d_config);
-+    INFO("\n BLKTAP3: disk added to configuration \n")
- 
--    /* tell qemu to remount /dev/xvdc */
--    libxl__qmp_change_cdrom(gc, domid, olddisk);
-+    rc = libxl__dm_check_start(gc, &d_config, domid);
-+    if (rc) goto out;
-+    INFO("\n BLKTAP3: check started the dm \n")
-+
-+   rc = libxl__set_domain_configuration(gc, domid, &d_config);
-+   if (rc) goto out;
-+
-+   INFO("\n BLKTAP3: Set domain configuration \n")
-+   libxl_device_xs_create(ctx, gc, &device, vdev, domid, devpath, iso);
-+   if(stubdomid >= 0) {
-+   	libxl_device_xs_create(ctx, gc, &device, vdev, stubdomid, devpath, iso);
-+   }
-+    INFO("\n BLKTAP3: waiting for backend connection \n")
-+    rc = libxl__wait_for_backend(gc, be_path, GCSPRINTF("%d", XenbusStateConnected));
-+    if (rc < 0)
-+        goto out;
-+
 +   INFO("\n BLKTAP3: wrote new device \n")
 +   /* tell qemu to remount /dev/xvdc */
 +   libxl__qmp_change_cdrom(gc, domid, olddisk);
-+   libxl__qmp_change_cdrom(gc, stubdomid, olddisk);
+ 
+-    /* tell qemu to remount /dev/xvdc */
+-    libxl__qmp_change_cdrom(gc, domid, olddisk);
++   INFO("\n BLKTAP3: qemu remount device \n")
  
 -    libxl__ao_complete(egc, ao, 0);
-+   INFO("\n BLKTAP3: qemu remount device \n")
-+
 +   libxl__ao_complete(egc, ao, 0);
  out:
 -    if (lock) libxl__unlock_domain_userdata(lock);
@@ -397,15 +378,6 @@ Index: xen-4.9.0/tools/libxl/libxl_device.c
  char *libxl__device_frontend_path(libxl__gc *gc, libxl__device *device)
  {
      char *dom_path = libxl__xs_get_dompath(gc, device->domid);
-@@ -418,7 +421,7 @@ char *libxl__device_disk_string_of_backe
- {
-     switch (backend) {
-         case LIBXL_DISK_BACKEND_QDISK: return "qdisk";
--        case LIBXL_DISK_BACKEND_TAP: return "phy";
-+        case LIBXL_DISK_BACKEND_TAP: return "tap";
-         case LIBXL_DISK_BACKEND_PHY: return "phy";
-         default: return NULL;
-     }
 @@ -726,6 +729,7 @@ int libxl__device_destroy(libxl__gc *gc,
          /* May not exist if this is not a tap device */
          if (tapdisk_path) {
@@ -587,3 +559,24 @@ Index: xen-4.9.0/extras/mini-os/blkfront.c
      printk("close blk: backend=%s node=%s\n", dev->backend, dev->nodename);
  
      snprintf(path, sizeof(path), "%s/state", dev->backend);
+Index: xen-4.9.0/tools/qemu-xen-traditional/xenstore.c
+===================================================================
+--- xen-4.9.0.orig/tools/qemu-xen-traditional/xenstore.c
++++ xen-4.9.0/tools/qemu-xen-traditional/xenstore.c
+@@ -279,13 +279,14 @@ static void xenstore_get_backend_path(ch
+     backend_dompath = xs_get_domain_path(xsh, domid_backend);
+     if (!backend_dompath) goto out;
+     
+-    const char *expected_devtypes[4];
++    const char *expected_devtypes[5];
+     const char **expected_devtype = expected_devtypes;
+ 
+     *expected_devtype++ = devtype;
+-    if (!strcmp(devtype, "vbd")) {
++    if (!strcmp(devtype, "vbd") || !strcmp(devtype, "vbd3")) {
+ 	*expected_devtype++ = "tap";
+ 	*expected_devtype++ = "qdisk";
++	*expected_devtype++ = "vbd3";
+     }
+     *expected_devtype = 0;
+     assert(expected_devtype <
