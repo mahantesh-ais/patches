@@ -1,0 +1,14 @@
+Index: mahantesh/manager-test/manager/xenmgr/Vm/React.hs
+===================================================================
+--- mahantesh.orig/manager-test/manager/xenmgr/Vm/React.hs
++++ mahantesh/manager-test/manager/xenmgr/Vm/React.hs
+@@ -530,6 +530,9 @@ notifyVmStateUpdate = do
+       xenmgrObjectPath
+       (uuidStr uuid)
+       (st maybe_state)
++    case maybe_state of
++      Just state -> do liftIO $ xsWrite ("/local/domain/" ++ show uuid ++ "/vm-state") (fromString state)
++      Nothing -> return ()
+     where
+     st s =
+       case s of
