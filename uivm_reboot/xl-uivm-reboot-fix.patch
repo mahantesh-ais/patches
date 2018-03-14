@@ -34,7 +34,7 @@ Index: xen-4.9.1/tools/libxl/libxl_utils.c
 ===================================================================
 --- xen-4.9.1.orig/tools/libxl/libxl_utils.c
 +++ xen-4.9.1/tools/libxl/libxl_utils.c
-@@ -1389,6 +1389,65 @@ int libxl_util_xs_read(libxl_ctx *ctx, c
+@@ -1389,6 +1389,67 @@ int libxl_util_xs_read(libxl_ctx *ctx, c
      return 0;
  }
  
@@ -74,9 +74,11 @@ Index: xen-4.9.1/tools/libxl/libxl_utils.c
 +    else {
 +      if(!strcmp(buf, value)) {
 +        ret = 0;
++        free(buf);
 +        break;
 +      }
 +      else {
++        free(buf);
 +        continue;
 +      }
 +    }
